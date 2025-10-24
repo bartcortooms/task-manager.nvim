@@ -3,6 +3,7 @@ local jira = require("task-manager.jira")
 local git = require("task-manager.git")
 local worktree = require("task-manager.worktree")
 local task_utils = require("task-manager.task_utils")
+local ui = require("task-manager.ui")
 
 local normalize_path = task_utils.normalize_path
 local normalize_and_compare = task_utils.normalize_and_compare
@@ -49,27 +50,6 @@ local M = {
 local autocmd_registered = false
 local keymaps_registered = false
 local reveal_lock = false
-
-local function normalize_path(path)
-  if not path or path == "" then
-    return path
-  end
-  local expanded = vim.fn.expand(path)
-  if expanded ~= "/" then
-    expanded = expanded:gsub("/+", "/")
-    expanded = expanded:gsub("/$", "")
-  end
-  return expanded
-end
-
-local function normalize_and_compare(a, b)
-  local na = normalize_path(a)
-  local nb = normalize_path(b)
-  if not na or not nb then
-    return false
-  end
-  return na == nb
-end
 
 local function restore_auto_session()
   local ok, auto_session = pcall(require, "auto-session")
@@ -232,49 +212,33 @@ function M.create_repo_worktree(task_dir, repo_obj, branch_name)
   return worktree.create(task_dir, repo_obj, branch_name)
 end
 
--- Create a new task with multi-repo support
-local function show_repo_selection(task_label, task_dir, task_dir_name)
+
+local function finalize_task(issue_key, suffix)
+  local task_dir_name = build_task_name(issue_key, suffix or "")
+  local task_dir = M.config.tasks_base .. "/" .. task_dir_name
+
+  if vim.fn.isdirectory(task_dir) == 0 then
+    vim.fn.mkdir(task_dir, "p")
+    vim.notify("Created task directory: " .. task_dir, vim.log.levels.INFO)
+  end
+
+  local label = issue_key
+  if suffix and suffix ~= "" then
+    label = label .. " · " .. suffix
+  end
+
   local repos = M.get_available_repos()
-  if #repos == 0 then
-    vim.notify("No bare repos found in " .. M.config.repos_base, vim.log.levels.WARN)
-    vim.notify("Task directory created, but no worktrees added", vim.log.levels.INFO)
-    vim.cmd("cd " .. vim.fn.fnameescape(task_dir))
-    return
-  end
-
-  local Menu = require("nui.menu")
-
-  local menu_items = {}
-  for _, repo in ipairs(repos) do
-    menu_items[#menu_items + 1] = Menu.item("📦 " .. repo.name, { repo = repo })
-  end
-
-  local menu = Menu({
-    position = "50%",
-    size = {
-      width = 50,
-      height = math.min(#menu_items + 2, 15),
-    },
-    border = {
-      style = "rounded",
-      text = {
-        top = " Select Repository for " .. task_label .. " ",
-        top_align = "center",
-      },
-    },
-  }, {
-    lines = menu_items,
-    max_width = 48,
-    keymap = {
-      focus_next = { "j", "<Down>", "<Tab>" },
-      focus_prev = { "k", "<Up>", "<S-Tab>" },
-      close = { "<Esc>", "<C-c>", "q" },
-      submit = { "<CR>", "<Space>" },
-    },
-    on_submit = function(item)
-      local selected_repo = item.repo
+  ui.show_repo_menu({
+    repos = repos,
+    task_label = label,
+    task_dir = task_dir,
+    on_empty = function()
+      vim.notify("No bare repos found in " .. M.config.repos_base, vim.log.levels.WARN)
+      vim.notify("Task directory created, but no worktrees added", vim.log.levels.INFO)
+      vim.cmd("cd " .. vim.fn.fnameescape(task_dir))
+    end,
+    on_select = function(selected_repo)
       local branch_name = task_dir_name
-
       if M.create_repo_worktree(task_dir, selected_repo, branch_name) then
         vim.notify("Created worktree: " .. selected_repo.name .. " (" .. branch_name .. ")", vim.log.levels.INFO)
         local worktree_path = task_dir .. "/" .. selected_repo.name
@@ -284,12 +248,43 @@ local function show_repo_selection(task_label, task_dir, task_dir_name)
       end
     end,
   })
-
-  menu:mount()
 end
 
-local function pick_issue(callback)
-  local Snacks = require("snacks")
+local function prompt_suffix(issue_key, default_suffix)
+  ui.prompt_suffix({
+    default_suffix = default_suffix or "",
+    on_submit = function(suffix)
+      finalize_task(issue_key, suffix)
+    end,
+  })
+end
+
+local function prompt_manual_issue(default_issue, default_suffix)
+  ui.prompt_issue_key({
+    default_issue = default_issue,
+    jira_prefix = M.config.jira_prefix,
+    parse_issue_string = parse_issue_string,
+    on_invalid = function()
+      vim.notify("Issue key is required", vim.log.levels.ERROR)
+      prompt_manual_issue(default_issue, default_suffix)
+    end,
+    on_submit = function(issue_key, inline_suffix)
+      local suffix_hint = inline_suffix ~= "" and inline_suffix or (default_suffix or "")
+      prompt_suffix(issue_key, suffix_hint)
+    end,
+  })
+end
+
+function M.create_task(issue_number)
+  if issue_number and issue_number ~= "" then
+    local issue_key, suffix = parse_issue_string(issue_number, M.config.jira_prefix)
+    if not issue_key then
+      vim.notify("Issue key is required", vim.log.levels.ERROR)
+      return
+    end
+    prompt_manual_issue(issue_key, suffix)
+    return
+  end
 
   local entries = {
     { label = "➕ Manual entry", issue = nil },
@@ -314,129 +309,25 @@ local function pick_issue(callback)
     end
   end
 
-  local items = vim.tbl_map(function(entry)
-    return { label = entry.label, issue = entry.issue }
-  end, entries)
-
-  Snacks.picker.select(items, {
-    prompt = "Select Jira issue",
-    filter = "fuzzy",
-    format_item = function(item)
-      return item.label
-    end,
-  }, function(choice)
-    if not callback then
-      return
-    end
-
-    if not choice then
-      callback(nil)
-      return
-    end
-
-    local issue = choice.issue
-    if issue == nil then
-      callback({ manual = true })
-    else
-      callback({
-        manual = false,
-        key = issue.key,
-        summary = issue.summary or "",
-        raw = issue.raw,
-      })
-    end
-  end)
-end
-
-local function finalize_task(issue_key, suffix)
-  local task_dir_name = build_task_name(issue_key, suffix or "")
-  local task_dir = M.config.tasks_base .. "/" .. task_dir_name
-
-  if vim.fn.isdirectory(task_dir) == 0 then
-    vim.fn.mkdir(task_dir, "p")
-    vim.notify("Created task directory: " .. task_dir, vim.log.levels.INFO)
-  end
-
-  local label = issue_key
-  if suffix and suffix ~= "" then
-    label = label .. " · " .. suffix
-  end
-
-  show_repo_selection(label, task_dir, task_dir_name)
-end
-
-local function prompt_suffix(issue_key, default_suffix)
-  local Snacks = require("snacks")
-
-  Snacks.input({
-    prompt = "Branch suffix (optional)",
-    default = default_suffix or "",
-  }, function(value)
-    if value == nil then
-      return
-    end
-    local suffix = slugify(value)
-    finalize_task(issue_key, suffix)
-  end)
-end
-
-local function prompt_manual_issue(default_issue, default_suffix)
-  local Snacks = require("snacks")
-
-  Snacks.input({
-    prompt = "Issue key (e.g. DEP-123)",
-    default = default_issue or "",
-  }, function(value)
-    if value == nil then
-      return
-    end
-
-    local issue_key, inline_suffix = parse_issue_string(value, M.config.jira_prefix)
-    if not issue_key then
-      vim.notify("Issue key is required", vim.log.levels.ERROR)
-      prompt_manual_issue(default_issue, default_suffix)
-      return
-    end
-
-    local suffix_hint = inline_suffix ~= "" and inline_suffix or (default_suffix or "")
-    prompt_suffix(issue_key, suffix_hint)
-  end)
-end
-
-function M.create_task(issue_number)
-  if issue_number and issue_number ~= "" then
-    local issue_key, suffix = parse_issue_string(issue_number, M.config.jira_prefix)
-    if not issue_key then
-      vim.notify("Issue key is required", vim.log.levels.ERROR)
-      return
-    end
-    prompt_manual_issue(issue_key, suffix)
-    return
-  end
-
-  pick_issue(function(selection)
-    if not selection then
-      return
-    end
-
-    if selection.manual then
+  ui.pick_issue({
+    entries = entries,
+    on_manual = function()
       prompt_manual_issue(nil, nil)
-      return
-    end
+    end,
+    on_issue = function(issue)
+      local issue_key = issue.key
+      if not issue_key or issue_key == "" then
+        vim.notify("Selected Jira issue is missing a key", vim.log.levels.ERROR)
+        return
+      end
 
-    local issue_key = selection.key
-    if not issue_key or issue_key == "" then
-      vim.notify("Selected Jira issue is missing a key", vim.log.levels.ERROR)
-      return
-    end
-
-    local suffix_hint = slugify(selection.summary or "")
-    prompt_suffix(issue_key:upper(), suffix_hint)
-  end)
+      local suffix_hint = slugify(issue.summary or "")
+      prompt_suffix(issue_key:upper(), suffix_hint)
+    end,
+  })
 end
 
 
--- Add another repo to an existing task
 function M.add_repo_to_task()
   local cwd = vim.fn.getcwd()
   local task_dir = resolve_task_dir(cwd)
@@ -448,57 +339,17 @@ function M.add_repo_to_task()
   end
 
   local task_id = vim.fn.fnamemodify(task_dir, ":t")
-  -- Get available repos
   local repos = M.get_available_repos()
-  if #repos == 0 then
-    vim.notify("No bare repos found in " .. M.config.repos_base, vim.log.levels.WARN)
-    return
-  end
 
-  -- Show TUI menu to select repository
-  local Menu = require("nui.menu")
-
-  local menu_items = {}
-  for _, repo in ipairs(repos) do
-    -- Check if already exists
-    if vim.fn.isdirectory(task_dir .. "/" .. repo.name) == 1 then
-      table.insert(menu_items, Menu.item("✓ " .. repo.name .. " (already added)", { repo = repo, exists = true }))
-    else
-      table.insert(menu_items, Menu.item("📦 " .. repo.name, { repo = repo, exists = false }))
-    end
-  end
-
-  local menu = Menu({
-    position = "50%",
-    size = {
-      width = 50,
-      height = math.min(#menu_items + 2, 15),
-    },
-    border = {
-      style = "rounded",
-      text = {
-        top = " Add Repository to " .. task_id:upper() .. " ",
-        top_align = "center",
-      },
-    },
-  }, {
-    lines = menu_items,
-    max_width = 48,
-    keymap = {
-      focus_next = { "j", "<Down>", "<Tab>" },
-      focus_prev = { "k", "<Up>", "<S-Tab>" },
-      close = { "<Esc>", "<C-c>", "q" },
-      submit = { "<CR>", "<Space>" },
-    },
-    on_submit = function(item)
-      if item.exists then
-        vim.notify("Repository already added to this task", vim.log.levels.WARN)
-        return
-      end
-
-      local selected_repo = item.repo
+  ui.show_repo_menu({
+    repos = repos,
+    task_label = task_id:upper(),
+    task_dir = task_dir,
+    on_empty = function()
+      vim.notify("No bare repos found in " .. M.config.repos_base, vim.log.levels.WARN)
+    end,
+    on_select = function(selected_repo)
       local branch_name = task_id
-
       if M.create_repo_worktree(task_dir, selected_repo, branch_name) then
         vim.notify("Added worktree: " .. selected_repo.name .. " (" .. branch_name .. ")", vim.log.levels.INFO)
         local worktree_path = task_dir .. "/" .. selected_repo.name
@@ -508,18 +359,10 @@ function M.add_repo_to_task()
       end
     end,
   })
-
-  menu:mount()
 end
 
 -- List all tasks with Telescope
 function M.list_tasks()
-  local pickers = require("telescope.pickers")
-  local finders = require("telescope.finders")
-  local conf = require("telescope.config").values
-  local actions = require("telescope.actions")
-  local action_state = require("telescope.actions.state")
-
   local entries = {
     {
       display = "➕ Create new task",
@@ -543,56 +386,25 @@ function M.list_tasks()
     })
   end
 
-  pickers.new({}, {
+  ui.list_tasks_picker({
     prompt_title = "Jira Tasks",
-    finder = finders.new_table({
-      results = entries,
-      entry_maker = function(entry)
-        return {
-          value = entry,
-          display = entry.display,
-          ordinal = entry.ordinal,
-        }
-      end,
-    }),
-    sorter = conf.generic_sorter({}),
-    attach_mappings = function(prompt_bufnr, map)
-      local function delete_selected_task()
-        local selection = action_state.get_selected_entry()
-        if not selection or selection.value.kind ~= "task" then
-          vim.notify("Select a task before deleting", vim.log.levels.WARN)
-          return
-        end
-        actions.close(prompt_bufnr)
-        M.prompt_delete_task(selection.value.task)
-      end
-
-      map("i", "<C-d>", delete_selected_task)
-      map("n", "d", delete_selected_task)
-
-      actions.select_default:replace(function()
-        actions.close(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-        if not selection then
-          return
-        end
-
-        local entry = selection.value
-
-        if entry.kind == "create" then
-          M.create_task()
-        elseif entry.kind == "cleanup" then
-          M.cleanup_stale_worktrees()
-        elseif entry.kind == "task" and entry.task then
-          vim.cmd("cd " .. vim.fn.fnameescape(entry.task.path))
-          vim.notify("Switched to task: " .. entry.task.name, vim.log.levels.INFO)
-          restore_auto_session()
-          M.reveal_path_in_tree(entry.task.path)
-        end
-      end)
-      return true
+    entries = entries,
+    on_delete = function(task)
+      M.prompt_delete_task(task)
     end,
-  }):find()
+    on_select = function(entry)
+      if entry.kind == "create" then
+        M.create_task()
+      elseif entry.kind == "cleanup" then
+        M.cleanup_stale_worktrees()
+      elseif entry.kind == "task" and entry.task then
+        vim.cmd("cd " .. vim.fn.fnameescape(entry.task.path))
+        vim.notify("Switched to task: " .. entry.task.name, vim.log.levels.INFO)
+        restore_auto_session()
+        M.reveal_path_in_tree(entry.task.path)
+      end
+    end,
+  })
 end
 
 -- List repos within current task
@@ -620,34 +432,15 @@ function M.list_task_repos()
     return
   end
 
-  pickers.new({}, {
-    prompt_title = "Task Repositories",
-    finder = finders.new_table({
-      results = repos,
-      entry_maker = function(entry)
-        return {
-          value = entry,
-          display = entry.name,
-          ordinal = entry.name,
-        }
-      end,
-    }),
-    sorter = conf.generic_sorter({}),
-    attach_mappings = function(prompt_bufnr, map)
-      actions.select_default:replace(function()
-        actions.close(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-        if selection then
-          -- Change to repo directory
-          vim.cmd("cd " .. vim.fn.fnameescape(selection.value.path))
-          vim.notify("Switched to repo: " .. selection.value.name, vim.log.levels.INFO)
-          restore_auto_session()
-          M.reveal_path_in_tree(selection.value.path)
-        end
-      end)
-      return true
+  ui.list_repos_picker({
+    repos = repos,
+    on_select = function(repo)
+      vim.cmd("cd " .. vim.fn.fnameescape(repo.path))
+      vim.notify("Switched to repo: " .. repo.name, vim.log.levels.INFO)
+      restore_auto_session()
+      M.reveal_path_in_tree(repo.path)
     end,
-  }):find()
+  })
 end
 
 
