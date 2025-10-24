@@ -110,7 +110,8 @@ local function ensure_branch_available(bare_repo, repo_name, branch_name)
   return true, true
 end
 
-function M.create(task_dir, repo_obj, branch_name)
+function M.create(task_dir, repo_obj, branch_name, opts)
+  opts = opts or {}
   local bare_repo = repo_obj.path
   local repo_name = repo_obj.name
 
@@ -118,7 +119,8 @@ function M.create(task_dir, repo_obj, branch_name)
     return notify_and_return("Bare repo not found: " .. bare_repo)
   end
 
-  local worktree_path = task_dir .. "/" .. repo_name
+  local worktree_name = opts.worktree_name or repo_name
+  local worktree_path = task_dir .. "/" .. worktree_name
   if vim.fn.isdirectory(worktree_path) == 1 then
     return notify_and_return("Worktree directory already exists: " .. worktree_path, vim.log.levels.WARN)
   end

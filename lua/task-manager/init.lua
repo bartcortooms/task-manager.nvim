@@ -208,8 +208,74 @@ function M.is_in_tasks_tree(dir)
 end
 
 -- Helper: Create worktree for a repo in task directory
-function M.create_repo_worktree(task_dir, repo_obj, branch_name)
-  return worktree.create(task_dir, repo_obj, branch_name)
+function M.create_repo_worktree(task_dir, repo_obj, branch_name, opts)
+  return worktree.create(task_dir, repo_obj, branch_name, opts)
+end
+
+local function get_worktree_path(task_dir, worktree_name)
+  return task_dir .. "/" .. worktree_name
+end
+
+local function worktree_exists(task_dir, worktree_name)
+  return vim.fn.isdirectory(get_worktree_path(task_dir, worktree_name)) == 1
+end
+
+local function after_worktree_created(task_dir, worktree_name)
+  local worktree_path = get_worktree_path(task_dir, worktree_name)
+  vim.cmd("cd " .. vim.fn.fnameescape(worktree_path))
+  restore_auto_session()
+  M.reveal_path_in_tree(worktree_path)
+end
+
+local function add_repo_worktree(task_dir, repo, branch_base, opts)
+  opts = opts or {}
+  local message_prefix = opts.message_prefix or "Added worktree"
+
+  local function create_and_setup(worktree_name, branch_name)
+    local ok = M.create_repo_worktree(task_dir, repo, branch_name, { worktree_name = worktree_name })
+    if not ok then
+      return
+    end
+    vim.notify(string.format("%s: %s (%s)", message_prefix, worktree_name, branch_name), vim.log.levels.INFO)
+    after_worktree_created(task_dir, worktree_name)
+    if opts.on_success then
+      opts.on_success(worktree_name, branch_name)
+    end
+  end
+
+  if not worktree_exists(task_dir, repo.name) then
+    create_and_setup(repo.name, branch_base)
+    return
+  end
+
+  local function prompt_for_suffix()
+    ui.prompt_suffix({
+      prompt = opts.suffix_prompt or ("Suffix for " .. repo.name .. " (required for additional worktree)"),
+      default_suffix = opts.default_suffix or "",
+      on_cancel = function()
+        if opts.on_cancel then
+          opts.on_cancel()
+        end
+      end,
+      on_submit = function(suffix)
+        if suffix == "" then
+          vim.notify("Suffix is required to create another worktree for " .. repo.name, vim.log.levels.ERROR)
+          prompt_for_suffix()
+          return
+        end
+        local worktree_name = repo.name .. "-" .. suffix
+        if worktree_exists(task_dir, worktree_name) then
+          vim.notify("Worktree '" .. worktree_name .. "' already exists in this task", vim.log.levels.ERROR)
+          prompt_for_suffix()
+          return
+        end
+        local branch_name = branch_base .. "-" .. suffix
+        create_and_setup(worktree_name, branch_name)
+      end,
+    })
+  end
+
+  prompt_for_suffix()
 end
 
 
@@ -238,14 +304,16 @@ local function finalize_task(issue_key, suffix)
       vim.cmd("cd " .. vim.fn.fnameescape(task_dir))
     end,
     on_select = function(selected_repo)
-      local branch_name = task_dir_name
-      if M.create_repo_worktree(task_dir, selected_repo, branch_name) then
-        vim.notify("Created worktree: " .. selected_repo.name .. " (" .. branch_name .. ")", vim.log.levels.INFO)
-        local worktree_path = task_dir .. "/" .. selected_repo.name
-        vim.cmd("cd " .. vim.fn.fnameescape(worktree_path))
-        restore_auto_session()
-        M.reveal_path_in_tree(worktree_path)
-      end
+      add_repo_worktree(task_dir, selected_repo, task_dir_name, {
+        message_prefix = "Created worktree",
+        suffix_prompt = "Suffix for " .. selected_repo.name .. " (required for additional worktree)",
+      })
+    end,
+    on_exists = function(selected_repo)
+      add_repo_worktree(task_dir, selected_repo, task_dir_name, {
+        message_prefix = "Created worktree",
+        suffix_prompt = "Suffix for " .. selected_repo.name .. " (required for additional worktree)",
+      })
     end,
   })
 end
@@ -349,14 +417,16 @@ function M.add_repo_to_task()
       vim.notify("No bare repos found in " .. M.config.repos_base, vim.log.levels.WARN)
     end,
     on_select = function(selected_repo)
-      local branch_name = task_id
-      if M.create_repo_worktree(task_dir, selected_repo, branch_name) then
-        vim.notify("Added worktree: " .. selected_repo.name .. " (" .. branch_name .. ")", vim.log.levels.INFO)
-        local worktree_path = task_dir .. "/" .. selected_repo.name
-        vim.cmd("cd " .. vim.fn.fnameescape(worktree_path))
-        restore_auto_session()
-        M.reveal_path_in_tree(worktree_path)
-      end
+      add_repo_worktree(task_dir, selected_repo, task_id, {
+        message_prefix = "Added worktree",
+        suffix_prompt = "Suffix for " .. selected_repo.name .. " (required for additional worktree)",
+      })
+    end,
+    on_exists = function(selected_repo)
+      add_repo_worktree(task_dir, selected_repo, task_id, {
+        message_prefix = "Added worktree",
+        suffix_prompt = "Suffix for " .. selected_repo.name .. " (required for additional worktree)",
+      })
     end,
   })
 end
