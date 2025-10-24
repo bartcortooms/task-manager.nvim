@@ -131,7 +131,7 @@ function M.get_remote_repo(path, remote)
   if not url then
     return nil
   end
-  return parse_github_repo(url) or url
+  return parse_github_repo(url)
 end
 
 return M

@@ -273,11 +273,10 @@ function M.open_pr_details(item)
   M.open_list_for_repo(item.repo_root)
 end
 
-function M.list_overview()
+local function collect_pr_items()
   local worktrees, task_dir = collect_worktrees_for_context()
   if #worktrees == 0 then
-    vim.notify("No repositories found for PR overview.", vim.log.levels.WARN)
-    return
+    return nil, "No repositories found for PR overview."
   end
 
   local items = {}
@@ -285,6 +284,106 @@ function M.list_overview()
     local item = build_pr_item(entry)
     item.task_dir = task_dir
     table.insert(items, item)
+  end
+
+  return items, nil
+end
+
+local function build_pr_nodes(items)
+  local nodes = {}
+  local max_number = 1
+  for _, item in ipairs(items) do
+    if item.pr and item.pr.number then
+      local repo_slug = item.repo_slug
+        or (item.pr.repository and item.pr.repository.nameWithOwner)
+        or (item.pr.headRepository and item.pr.headRepository.nameWithOwner)
+        or (item.pr.baseRepository and item.pr.baseRepository.nameWithOwner)
+        or ""
+      if repo_slug ~= "" then
+        local node = {
+          __typename = "PullRequest",
+          number = item.pr.number,
+          title = item.pr.title or "",
+          url = item.pr.url,
+          repository = { nameWithOwner = repo_slug },
+          headRefName = item.pr.headRefName or item.branch,
+          isDraft = item.pr.isDraft,
+          state = item.pr.state,
+          _task_item = item,
+        }
+        max_number = math.max(max_number, #tostring(node.number))
+        table.insert(nodes, node)
+      end
+    end
+  end
+  return nodes, max_number
+end
+
+local function show_with_octo_picker(nodes, max_number)
+  local entry_maker = require("octo.pickers.telescope.entry_maker")
+  local previewers = require("octo.pickers.telescope.previewers")
+  local config = require("octo.config")
+  local navigation = require("octo.navigation")
+  local pickers = require "telescope.pickers"
+  local finders = require "telescope.finders"
+  local actions = require "telescope.actions"
+  local action_state = require "telescope.actions.state"
+  local conf = require("telescope.config").values
+
+  local entry_fn = entry_maker.gen_from_issue(max_number, true)
+
+  pickers
+    .new({}, {
+      prompt_title = "Task Pull Requests",
+      finder = finders.new_table {
+        results = nodes,
+        entry_maker = function(node)
+          local entry = entry_fn(node)
+          if entry then
+            entry.tm_item = node._task_item
+          end
+          return entry
+        end,
+      },
+      sorter = conf.generic_sorter({}),
+      previewer = previewers.issue.new({}),
+      attach_mappings = function(_, map)
+        actions.select_default:replace(function(prompt_bufnr)
+          local selection = action_state.get_selected_entry(prompt_bufnr)
+          actions.close(prompt_bufnr)
+          if selection and selection.tm_item then
+            M.open_pr_details(selection.tm_item)
+          end
+        end)
+
+        local mappings = config.values.picker_config.mappings
+        if mappings and mappings.open_in_browser then
+          map("i", mappings.open_in_browser.lhs, function(prompt_bufnr)
+            local selection = action_state.get_selected_entry(prompt_bufnr)
+            actions.close(prompt_bufnr)
+            if selection and selection.obj then
+              navigation.open_in_browser("pull_request", selection.repo, selection.value)
+            end
+          end)
+        end
+        return true
+      end,
+    })
+    :find()
+end
+
+function M.list_overview()
+  local items, err = collect_pr_items()
+  if not items then
+    vim.notify(err, vim.log.levels.WARN)
+    return
+  end
+
+  local nodes, max_number = build_pr_nodes(items)
+
+  if #nodes > 0 and ensure_octo_available() then
+    show_with_octo_picker(nodes, max_number)
+    return
   end
 
   ui.show_pr_overview(items, {
