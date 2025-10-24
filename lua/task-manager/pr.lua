@@ -338,7 +338,7 @@ local function show_with_octo_picker(nodes, max_number)
     items = {
       { width = max_number },
       { width = 2 },
-      { width = 20 },
+      { width = 30 },
       { remaining = true },
     },
   }
