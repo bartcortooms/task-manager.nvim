@@ -1,5 +1,7 @@
 
 local jira = require("task-manager.jira")
+local git = require("task-manager.git")
+local worktree = require("task-manager.worktree")
 
 local defaults = {
   -- Base directory for tasks (each task gets its own directory)
@@ -38,74 +40,6 @@ local M = {
 local autocmd_registered = false
 local keymaps_registered = false
 local reveal_lock = false
-
-local function run_command(cmd_args)
-  if vim.system then
-    local obj = vim.system(cmd_args, { text = true }):wait()
-    local output = obj.stdout or ""
-    local err = obj.stderr or ""
-    if err ~= "" then
-      if output ~= "" then
-        output = output .. "\n" .. err
-      else
-        output = err
-      end
-    end
-    return obj.code, vim.trim(output)
-  end
-
-  local stdout = {}
-  local stderr = {}
-  local job_id = vim.fn.jobstart(cmd_args, {
-    stdout_buffered = true,
-    stderr_buffered = true,
-    on_stdout = function(_, data)
-      if not data then
-        return
-      end
-      for _, line in ipairs(data) do
-        if line ~= "" then
-          table.insert(stdout, line)
-        end
-      end
-    end,
-    on_stderr = function(_, data)
-      if not data then
-        return
-      end
-      for _, line in ipairs(data) do
-        if line ~= "" then
-          table.insert(stderr, line)
-        end
-      end
-    end,
-  })
-
-  if job_id <= 0 then
-    return job_id, "Failed to start git process"
-  end
-
-  local result = vim.fn.jobwait({ job_id }, -1)
-  local code = result[1]
-
-  local output = table.concat(stdout, "\n")
-  local err = table.concat(stderr, "\n")
-  if err ~= "" then
-    if output ~= "" then
-      output = output .. "\n" .. err
-    else
-      output = err
-    end
-  end
-
-  return code, vim.trim(output)
-end
-
-local function run_git(bare_repo, args)
-  local cmd = { "git", "--git-dir=" .. bare_repo }
-  vim.list_extend(cmd, args)
-  return run_command(cmd)
-end
 
 local function normalize_path(path)
   if not path or path == "" then
@@ -212,19 +146,6 @@ local function get_tasks()
   return tasks
 end
 
-local function prune_repo_worktrees(repo, opts)
-  opts = opts or {}
-  local code, output = run_git(repo.path, { "worktree", "prune", "--expire=now" })
-  if code ~= 0 then
-    local message = output ~= "" and output or "git worktree prune failed"
-    if not opts.silent then
-      vim.notify("Failed to prune worktrees for " .. repo.name .. ": " .. message, vim.log.levels.ERROR)
-    end
-    return false, message
-  end
-  return true
-end
-
 
 local function resolve_task_identifier(task)
   if type(task) == "table" and task.name and task.path then
@@ -302,19 +223,6 @@ local function resolve_task_dir(path)
   return nil
 end
 
-local function get_repo_branch(path)
-  local code, output = run_command({ "git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD" })
-  if code ~= 0 then
-    return nil
-  end
-  if output == "HEAD" then
-    -- Detached HEAD; try to show short commit hash
-    local _, commit = run_command({ "git", "-C", path, "rev-parse", "--short", "HEAD" })
-    return commit ~= "" and ("detached@" .. commit) or "detached"
-  end
-  return output
-end
-
 local function get_task_repos(task_dir)
   local repos = {}
   local handle = vim.loop.fs_scandir(task_dir)
@@ -329,7 +237,7 @@ local function get_task_repos(task_dir)
         table.insert(repos, {
           name = name,
           path = path,
-          branch = get_repo_branch(path),
+          branch = git.get_repo_branch(path),
         })
       end
     end
@@ -453,119 +361,7 @@ end
 
 -- Helper: Create worktree for a repo in task directory
 function M.create_repo_worktree(task_dir, repo_obj, branch_name)
-  local bare_repo = repo_obj.path
-  local repo_name = repo_obj.name
-
-  -- Check if bare repo exists
-  if vim.fn.isdirectory(bare_repo) == 0 then
-    vim.notify("Bare repo not found: " .. bare_repo, vim.log.levels.ERROR)
-    return false
-  end
-
-  local worktree_path = task_dir .. "/" .. repo_name
-
-  -- Prevent accidentally reusing an existing directory
-  if vim.fn.isdirectory(worktree_path) == 1 then
-    vim.notify("Worktree directory already exists: " .. worktree_path, vim.log.levels.WARN)
-    return false
-  end
-
-  -- Check if branch already exists in the bare repo
-  local branch_exists = false
-  local branch_code, branch_output = run_git(bare_repo, { "rev-parse", "--verify", "--quiet", branch_name })
-  if branch_code == 0 then
-    branch_exists = true
-  elseif branch_code ~= 1 then
-    local message = branch_output ~= "" and branch_output or "git rev-parse failed"
-    vim.notify("Failed to inspect branch: " .. message, vim.log.levels.ERROR)
-    return false
-  end
-
-  -- If branch exists, ensure it's not already checked out in another worktree
-  if branch_exists then
-    local list_code, list_output = run_git(bare_repo, { "worktree", "list", "--porcelain" })
-    if list_code ~= 0 then
-      local message = list_output ~= "" and list_output or "git worktree list failed"
-      vim.notify("Failed to inspect existing worktrees: " .. message, vim.log.levels.ERROR)
-      return false
-    end
-
-    local current = { branch = nil, prunable = false, path = nil }
-    local prunable_entry = nil
-
-    for line in string.gmatch(list_output .. "\n", "([^\n]*)\n") do
-      if line == "" then
-        if current.branch then
-          local branch = current.branch:gsub("^refs/heads/", "")
-          if branch == branch_name then
-            if current.prunable then
-              prunable_entry = current
-            else
-              vim.notify("Branch '" .. branch_name .. "' already checked out in another worktree", vim.log.levels.ERROR)
-              return false
-            end
-          end
-        end
-        current = { branch = nil, prunable = false, path = nil }
-      else
-        local path_line = line:match("^worktree%s+(.+)$")
-        if path_line then
-          current.path = path_line
-        else
-          local ref = line:match("^branch%s+(.+)$")
-          if ref then
-            current.branch = ref
-          elseif line:match("^prunable") then
-            current.prunable = true
-          end
-        end
-      end
-    end
-
-    if prunable_entry then
-      if prunable_entry.path then
-        local remove_code, remove_output = run_git(bare_repo, { "worktree", "remove", "--force", prunable_entry.path })
-        if remove_code ~= 0 then
-          local message = remove_output ~= "" and remove_output or "git worktree remove failed"
-          vim.notify("Failed to remove stale worktree at " .. prunable_entry.path .. ": " .. message, vim.log.levels.ERROR)
-          return false
-        end
-      end
-
-      local ok = prune_repo_worktrees({ name = repo_name, path = bare_repo }, { silent = true })
-      if ok == false then
-        return false
-      end
-
-      local recheck_code, recheck_output = run_git(bare_repo, { "worktree", "list", "--porcelain" })
-      if recheck_code == 0 then
-        for line in string.gmatch(recheck_output .. "\n", "([^\n]*)\n") do
-          local ref = line:match("^branch%s+(.+)$")
-          if ref and ref:gsub("^refs/heads/", "") == branch_name then
-            vim.notify("Branch '" .. branch_name .. "' still appears in worktree list after cleanup", vim.log.levels.ERROR)
-            return false
-          end
-        end
-      end
-    end
-  end
-
-  -- Create worktree using git command
-  local args
-  if branch_exists then
-    args = { "worktree", "add", worktree_path, branch_name }
-  else
-    args = { "worktree", "add", worktree_path, "-b", branch_name }
-  end
-
-  local code, output = run_git(bare_repo, args)
-  if code ~= 0 then
-    local message = output ~= "" and output or "git worktree add failed"
-    vim.notify("Failed to create worktree: " .. message, vim.log.levels.ERROR)
-    return false
-  end
-
-  return true
+  return worktree.create(task_dir, repo_obj, branch_name)
 end
 
 -- Create a new task with multi-repo support
@@ -1001,7 +797,7 @@ function M.cleanup_stale_worktrees(opts)
   local failures = {}
 
   for _, repo in ipairs(repos) do
-    local ok, message = prune_repo_worktrees(repo, { silent = true })
+    local ok, message = git.prune_worktrees(repo, { silent = true })
     if ok then
       pruned = pruned + 1
     else
@@ -1059,7 +855,7 @@ function M.delete_task(task, opts)
         local worktree_path = task_path .. "/" .. name
         local repo = repo_lookup[name]
         if repo then
-          local code, output = run_git(repo.path, { "worktree", "remove", "--force", worktree_path })
+          local code, output = git.run_git(repo.path, { "worktree", "remove", "--force", worktree_path })
           if code ~= 0 then
             table.insert(failures, repo.name .. ": " .. (output ~= "" and output or "git worktree remove failed"))
           else
