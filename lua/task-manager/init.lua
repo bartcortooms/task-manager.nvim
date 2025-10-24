@@ -461,15 +461,12 @@ function M.reveal_path_in_tree(path)
   if state and renderer.window_exists(state) then
     fs_source.navigate(state, tree_root, normalized, nil, true)
   else
+    if state and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+      renderer.close(state, false)
+      state = manager.get_state("filesystem")
+    end
     command.execute({
       action = "show",
-      source = "filesystem",
-      position = "left",
-      dir = tree_root,
-    })
-
-    command.execute({
-      action = "reveal",
       source = "filesystem",
       position = "left",
       dir = tree_root,
