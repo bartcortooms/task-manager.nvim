@@ -293,7 +293,7 @@ local function build_pr_nodes(items)
   local nodes = {}
   local max_number = 1
   for _, item in ipairs(items) do
-    if item.pr and item.pr.number then
+  if item.pr and item.pr.number then
       local repo_slug = item.repo_slug
         or (item.pr.repository and item.pr.repository.nameWithOwner)
         or (item.pr.headRepository and item.pr.headRepository.nameWithOwner)
@@ -324,6 +324,7 @@ local function show_with_octo_picker(nodes, max_number)
   local previewers = require("octo.pickers.telescope.previewers")
   local config = require("octo.config")
   local navigation = require("octo.navigation")
+  local utils = require("octo.utils")
   local pickers = require "telescope.pickers"
   local finders = require "telescope.finders"
   local actions = require "telescope.actions"
@@ -331,12 +332,13 @@ local function show_with_octo_picker(nodes, max_number)
   local conf = require("telescope.config").values
   local entry_display = require "telescope.pickers.entry_display"
 
-  local entry_fn = entry_maker.gen_from_issue(max_number, true)
+  local entry_fn = entry_maker.gen_from_issue(max_number)
   local displayer = entry_display.create {
     separator = " ",
     items = {
       { width = max_number },
-      { width = 35 },
+      { width = 2 },
+      { width = 20 },
       { remaining = true },
     },
   }
@@ -350,16 +352,16 @@ local function show_with_octo_picker(nodes, max_number)
           local entry = entry_fn(node)
           if entry then
             entry.tm_item = node._task_item
-            local worktree = entry.tm_item and entry.tm_item.worktree_name or entry.repo
-            local orig_repo = entry.repo
+            local worktree = entry.tm_item and entry.tm_item.worktree_name or ""
+            local icon = utils.get_icon(entry)
             entry.display = function()
               return displayer {
                 { entry.value, "TelescopeResultsNumber" },
-                { worktree or "", "OctoDetailsLabel" },
+                icon,
+                { worktree, "OctoDetailsLabel" },
                 { node.title or "" },
               }
             end
-            entry.repo = orig_repo
           end
           return entry
         end,
