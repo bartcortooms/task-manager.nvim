@@ -2,6 +2,15 @@
 local jira = require("task-manager.jira")
 local git = require("task-manager.git")
 local worktree = require("task-manager.worktree")
+local task_utils = require("task-manager.task_utils")
+
+local normalize_path = task_utils.normalize_path
+local normalize_and_compare = task_utils.normalize_and_compare
+local slugify = task_utils.slugify
+local build_task_name = task_utils.build_task_name
+local parse_issue_string = task_utils.parse_issue_string
+local is_path_inside = task_utils.is_path_inside
+local get_task_repos = task_utils.get_task_repos
 
 local defaults = {
   -- Base directory for tasks (each task gets its own directory)
@@ -62,56 +71,6 @@ local function normalize_and_compare(a, b)
   return na == nb
 end
 
-local function slugify(str)
-  str = str or ""
-  str = str:lower()
-  str = str:gsub("%s+", "-")
-  str = str:gsub("[^%w%-]", "-")
-  str = str:gsub("%-+", "-")
-  str = str:gsub("^%-", "")
-  str = str:gsub("%-$", "")
-  return str
-end
-
-local function build_task_name(issue_key, suffix)
-  if suffix and suffix ~= "" then
-    return string.format("%s-%s", issue_key:lower(), slugify(suffix))
-  end
-  return issue_key:lower()
-end
-
-local function parse_issue_string(value, jira_prefix)
-  if not value then
-    return nil, ""
-  end
-
-  value = vim.trim(value)
-  if value == "" then
-    return nil, ""
-  end
-
-  if not value:match("^[A-Za-z]+%-") then
-    if jira_prefix and jira_prefix ~= "" then
-      value = jira_prefix .. "-" .. value
-    end
-  end
-
-  value = value:upper()
-  local issue_key = value
-  local suffix = ""
-
-  local key_only, extra = value:match("^([%w%-]+%-%d+)%-(.+)$")
-  if not key_only then
-    key_only, extra = value:match("^([%w%-]+%-%d+)%s+(.+)$")
-  end
-  if key_only then
-    issue_key = key_only
-    suffix = slugify(extra)
-  end
-
-  return issue_key, suffix
-end
-
 local function restore_auto_session()
   local ok, auto_session = pcall(require, "auto-session")
   if not ok then
@@ -122,58 +81,16 @@ local function restore_auto_session()
 end
 
 local function get_tasks()
-  local tasks = {}
-  local handle = vim.loop.fs_scandir(M.config.tasks_base)
-  if handle then
-    while true do
-      local name, type = vim.loop.fs_scandir_next(handle)
-      if not name then
-        break
-      end
-      if type == "directory" then
-        table.insert(tasks, {
-          name = name,
-          path = M.config.tasks_base .. "/" .. name,
-        })
-      end
-    end
-  end
-
-  table.sort(tasks, function(a, b)
-    return a.name < b.name
-  end)
-
-  return tasks
+  return task_utils.get_tasks(M.config.tasks_base)
 end
-
 
 local function resolve_task_identifier(task)
-  if type(task) == "table" and task.name and task.path then
-    return task.name, task.path
-  end
-
-  if type(task) == "string" and task ~= "" then
-    local normalized = task:lower()
-    local path = M.config.tasks_base .. "/" .. normalized
-    return normalized, path
-  end
-
-  return nil, nil
+  return task_utils.resolve_task_identifier(task, M.config.tasks_base)
 end
 
-local function is_path_inside(path, root)
-  if not path or not root then
-    return false
-  end
-  if path == root then
-    return true
-  end
-  if root:sub(-1) ~= "/" then
-    root = root .. "/"
-  end
-  return path:sub(1, #root) == root
+local function resolve_task_dir(path)
+  return task_utils.resolve_task_dir(path, M.config.tasks_base)
 end
-
 
 -- Helper: Get list of available bare repos
 function M.get_available_repos()
@@ -198,55 +115,6 @@ function M.get_available_repos()
       end
     end
   end
-  return repos
-end
-
-local function resolve_task_dir(path)
-  local base = normalize_path(M.config.tasks_base)
-  local target = normalize_path(path or vim.fn.getcwd())
-  if not base or base == "" or not target or target == base then
-    return nil
-  end
-  if target:sub(1, #base) ~= base then
-    return nil
-  end
-
-  local task_dir = target
-  while task_dir ~= base and vim.fn.fnamemodify(task_dir, ":h") ~= base do
-    task_dir = vim.fn.fnamemodify(task_dir, ":h")
-  end
-
-  if vim.fn.fnamemodify(task_dir, ":h") == base then
-    return task_dir
-  end
-
-  return nil
-end
-
-local function get_task_repos(task_dir)
-  local repos = {}
-  local handle = vim.loop.fs_scandir(task_dir)
-  if handle then
-    while true do
-      local name, type = vim.loop.fs_scandir_next(handle)
-      if not name then
-        break
-      end
-      if type == "directory" and name ~= ".git" then
-        local path = task_dir .. "/" .. name
-        table.insert(repos, {
-          name = name,
-          path = path,
-          branch = git.get_repo_branch(path),
-        })
-      end
-    end
-  end
-
-  table.sort(repos, function(a, b)
-    return a.name < b.name
-  end)
-
   return repos
 end
 
