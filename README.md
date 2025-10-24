@@ -4,7 +4,7 @@ A multi-repository task management system for Neovim that integrates Jira workfl
 
 ## Overview
 
-This task manager helps you organize your work when a single Jira ticket requires changes across multiple repositories. It creates isolated workspaces for each task using git worktrees, with automatic session restoration via Claude Code integration.
+This task manager helps you organize your work when a single Jira ticket requires changes across multiple repositories. It creates isolated workspaces for each task using git worktrees.
 
 ## How It Works
 
