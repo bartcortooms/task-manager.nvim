@@ -331,8 +331,17 @@ local function show_with_octo_picker(nodes, max_number)
   local actions = require "telescope.actions"
   local action_state = require "telescope.actions.state"
   local conf = require("telescope.config").values
+  local entry_display = require "telescope.pickers.entry_display"
 
   local entry_fn = entry_maker.gen_from_issue(max_number, true)
+  local displayer = entry_display.create {
+    separator = " ",
+    items = {
+      { width = max_number },
+      { width = 35 },
+      { remaining = true },
+    },
+  }
 
   pickers
     .new({}, {
@@ -343,6 +352,16 @@ local function show_with_octo_picker(nodes, max_number)
           local entry = entry_fn(node)
           if entry then
             entry.tm_item = node._task_item
+            local worktree = entry.tm_item and entry.tm_item.worktree_name or entry.repo
+            local orig_repo = entry.repo
+            entry.display = function()
+              return displayer {
+                { entry.value, "TelescopeResultsNumber" },
+                { worktree or "", "OctoDetailsLabel" },
+                { node.title or "" },
+              }
+            end
+            entry.repo = orig_repo
           end
           return entry
         end,
