@@ -4,6 +4,7 @@ local git = require("task-manager.git")
 local worktree = require("task-manager.worktree")
 local task_utils = require("task-manager.task_utils")
 local ui = require("task-manager.ui")
+local pr = require("task-manager.pr")
 
 local normalize_path = task_utils.normalize_path
 local normalize_and_compare = task_utils.normalize_and_compare
@@ -277,102 +278,6 @@ local function add_repo_worktree(task_dir, repo, branch_base, opts)
   end
 
   prompt_for_suffix()
-end
-
-local function get_current_repo_root()
-  local buf = vim.api.nvim_get_current_buf()
-  if buf and buf ~= 0 then
-    local name = vim.api.nvim_buf_get_name(buf)
-    if name and name ~= "" then
-      local repo = resolve_repo_root(name)
-      if repo then
-        return repo
-      end
-    end
-  end
-
-  local cwd = vim.fn.getcwd()
-  local repo_from_cwd = resolve_repo_root(cwd)
-  if repo_from_cwd then
-    return repo_from_cwd
-  end
-
-  local task_dir = resolve_task_dir(cwd)
-  if task_dir then
-    local repos = get_task_repos(task_dir)
-    if #repos == 1 then
-      return repos[1].path
-    end
-  end
-
-  return nil
-end
-
-local function ensure_octo_available()
-  if vim.fn.exists(":Octo") == 2 then
-    return true
-  end
-
-  local ok_lazy, lazy = pcall(require, "lazy")
-  if ok_lazy then
-    pcall(lazy.load, { plugins = { "octo.nvim" } })
-  end
-
-  return vim.fn.exists(":Octo") == 2
-end
-
-local function run_in_repo(repo_root, command)
-  local previous = vim.fn.getcwd()
-  local ok_cd, err = pcall(vim.cmd, "lcd " .. vim.fn.fnameescape(repo_root))
-  if not ok_cd then
-    vim.notify("Failed to change directory to repo: " .. err, vim.log.levels.ERROR)
-    return
-  end
-
-  local ok, cmd_err = pcall(vim.cmd, command)
-
-  pcall(vim.cmd, "lcd " .. vim.fn.fnameescape(previous))
-
-  if not ok then
-    vim.notify("Failed to run " .. command .. ": " .. cmd_err, vim.log.levels.ERROR)
-  end
-end
-
-function M.open_pr_list()
-  local repo_root = get_current_repo_root()
-  if not repo_root then
-    local cwd = vim.fn.getcwd()
-    local task_dir = resolve_task_dir(cwd)
-    if task_dir then
-      local repos = get_task_repos(task_dir)
-      if #repos == 0 then
-        vim.notify("No repositories attached to this task.", vim.log.levels.WARN)
-        return
-      end
-      ui.list_repos_picker({
-        prompt_title = "Select repository for PRs",
-        repos = repos,
-        on_select = function(repo)
-          M.open_pr_list_for_repo(repo.path)
-        end,
-      })
-      return
-    end
-
-    vim.notify("Could not determine repository for PR listing.", vim.log.levels.ERROR)
-    return
-  end
-
-  M.open_pr_list_for_repo(repo_root)
-end
-
-function M.open_pr_list_for_repo(repo_root)
-  if not ensure_octo_available() then
-    vim.notify("Octo.nvim is not available. Please install pwntester/octo.nvim.", vim.log.levels.ERROR)
-    return
-  end
-
-  run_in_repo(repo_root, "Octo pr list")
 end
 
 
@@ -860,8 +765,8 @@ local function register_keymaps()
   end, "Task Manager: List task repositories")
 
   set_map(keymaps.list_prs, function()
-    M.open_pr_list()
-  end, "Task Manager: List GitHub PRs")
+    pr.list_overview()
+  end, "Task Manager: PR overview")
 
   keymaps_registered = true
 end
@@ -884,6 +789,12 @@ function M.setup(opts)
   merged.jira = jira.setup(merged.jira, defaults.jira)
 
   M.config = merged
+
+  pr.setup({
+    get_tasks_base = function()
+      return M.config.tasks_base
+    end,
+  })
 
   -- Ensure base directories exist
   vim.fn.mkdir(M.config.tasks_base, "p")
@@ -921,9 +832,15 @@ function M.setup(opts)
   })
 
   vim.api.nvim_create_user_command("TaskPRs", function()
-    M.open_pr_list()
+    pr.list_overview()
   end, {
-    desc = "List GitHub PRs for current task/repo",
+    desc = "Show GitHub PR overview for current task",
+  })
+
+  vim.api.nvim_create_user_command("TaskPROcto", function()
+    pr.open_list()
+  end, {
+    desc = "Open Octo PR list for current repo/task",
   })
 
 

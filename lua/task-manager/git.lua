@@ -97,4 +97,41 @@ function M.prune_worktrees(repo, opts)
   return true
 end
 
+function M.get_upstream_branch(path)
+  local code, output = run_command({ "git", "-C", path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}" })
+  if code ~= 0 or output == "" then
+    return nil
+  end
+  return output
+end
+
+function M.get_remote_url(path, remote)
+  remote = remote or "origin"
+  local code, output = run_command({ "git", "-C", path, "remote", "get-url", remote })
+  if code ~= 0 or output == "" then
+    return nil
+  end
+  return output
+end
+
+local function parse_github_repo(url)
+  if not url then
+    return nil
+  end
+  local repo = url:match("github%.com[:/](.+)$")
+  if not repo then
+    return nil
+  end
+  repo = repo:gsub("%.git$", "")
+  return repo
+end
+
+function M.get_remote_repo(path, remote)
+  local url = M.get_remote_url(path, remote)
+  if not url then
+    return nil
+  end
+  return parse_github_repo(url) or url
+end
+
 return M

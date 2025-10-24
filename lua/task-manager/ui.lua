@@ -254,4 +254,93 @@ function M.list_repos_picker(opts)
   }):find()
 end
 
+local function format_pr_entry(item)
+  local branch = item.branch or "-"
+  local status
+  local summary
+
+  if item.pr then
+    status = item.pr.state or "open"
+    if item.pr.isDraft then
+      status = status .. " (draft)"
+    end
+    summary = item.pr.title or ""
+  elseif item.error then
+    status = "error"
+    summary = item.error
+  else
+    status = item.status or "unknown"
+    summary = ""
+  end
+
+  local repo = item.repo_slug or ""
+  return string.format("%-18s %-24s %-12s %-16s %s", item.worktree_name or "", branch, status, repo, summary)
+end
+
+function M.show_pr_overview(items, opts)
+  opts = opts or {}
+  if not items or vim.tbl_isempty(items) then
+    vim.notify("No pull requests found for current context.", vim.log.levels.INFO)
+    return
+  end
+
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+
+  pickers.new({}, {
+    prompt_title = opts.prompt_title or "Task PR Overview",
+    finder = finders.new_table({
+      results = items,
+      entry_maker = function(item)
+        return {
+          value = item,
+          display = format_pr_entry(item),
+          ordinal = table.concat({
+            item.worktree_name or "",
+            item.branch or "",
+            item.status or "",
+            item.repo_slug or "",
+            item.pr and item.pr.title or "",
+          }, " "),
+        }
+      end,
+    }),
+    sorter = conf.generic_sorter({}),
+    attach_mappings = function(prompt_bufnr, map)
+      local function handle_open_pr()
+        local selection = action_state.get_selected_entry()
+        if not selection then
+          return
+        end
+        actions.close(prompt_bufnr)
+        if opts.on_open_pr then
+          opts.on_open_pr(selection.value)
+        end
+      end
+
+      local function handle_open_repo()
+        local selection = action_state.get_selected_entry()
+        if not selection then
+          return
+        end
+        actions.close(prompt_bufnr)
+        if opts.on_open_repo then
+          opts.on_open_repo(selection.value)
+        end
+      end
+
+      actions.select_default:replace(handle_open_pr)
+      if opts.on_open_repo then
+        map("i", "<C-r>", handle_open_repo)
+        map("n", "r", handle_open_repo)
+      end
+
+      return true
+    end,
+  }):find()
+end
+
 return M
