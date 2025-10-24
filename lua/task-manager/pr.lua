@@ -300,10 +300,12 @@ local function build_pr_nodes(items)
         or (item.pr.baseRepository and item.pr.baseRepository.nameWithOwner)
         or ""
       if repo_slug ~= "" then
+        local base_title = item.pr.title or ""
+        local prefix = item.worktree_name and ("[" .. item.worktree_name .. "] ") or ""
         local node = {
           __typename = "PullRequest",
           number = item.pr.number,
-          title = item.pr.title or "",
+          title = prefix .. base_title,
           url = item.pr.url,
           repository = { nameWithOwner = repo_slug },
           headRefName = item.pr.headRefName or item.branch,
