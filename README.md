@@ -42,12 +42,11 @@ Each task directory is a separate Claude Code session, allowing you to maintain 
 
 ### Install with Lazy.nvim
 
-Add this spec to your Lazy config. While the repository is still local, point `dir` at this folder; once you publish it, drop the `dir` line and keep the GitHub slug.
+Add this spec to your Lazy config.
 
 ```lua
 {
   "bartcortooms/task-manager.nvim",
-  dir = "~/dotfiles/task-manager", -- remove after pushing the repo
   dependencies = {
     "folke/snacks.nvim",
     "janBorowy/jirac.nvim",
