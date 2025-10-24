@@ -178,55 +178,6 @@ local function parse_issue_string(value, jira_prefix)
   return issue_key, suffix
 end
 
-local function resolve_jira_config_value(value, field)
-  if type(value) == "function" then
-    local ok, result = pcall(value)
-    if not ok then
-      error(string.format("Task Manager: failed to evaluate jira.%s: %s", field, result))
-    end
-    value = result
-  end
-
-  if type(value) == "string" then
-    value = vim.trim(value)
-  end
-
-  if value == "" then
-    value = nil
-  end
-
-  return value
-end
-
-local function validate_jira_config(config)
-  config = config or {}
-
-  local resolved = {
-    url = resolve_jira_config_value(config.url, "url"),
-    email = resolve_jira_config_value(config.email, "email"),
-    api_token = resolve_jira_config_value(config.api_token, "api_token"),
-    jql = resolve_jira_config_value(config.jql, "jql") or defaults.jira.jql,
-    max_results = resolve_jira_config_value(config.max_results, "max_results") or defaults.jira.max_results,
-  }
-
-  if not resolved.url then
-    error("Task Manager: configure jira.url via require('task-manager').setup({ jira = { url = ... } })")
-  end
-  if not resolved.email then
-    error("Task Manager: configure jira.email via require('task-manager').setup({ jira = { email = ... } })")
-  end
-  if not resolved.api_token then
-    error("Task Manager: configure jira.api_token via require('task-manager').setup({ jira = { api_token = ... } })")
-  end
-
-  resolved.max_results = tonumber(resolved.max_results) or defaults.jira.max_results
-  if resolved.max_results <= 0 then
-    error("Task Manager: jira.max_results must be greater than zero")
-  end
-
-  return resolved
-end
-
 local function restore_auto_session()
   local ok, auto_session = pcall(require, "auto-session")
   if not ok then
@@ -1302,9 +1253,7 @@ function M.setup(opts)
     jira_prefix = { merged.jira_prefix, "string" },
   })
 
-  merged.jira = validate_jira_config(merged.jira)
-
-  jira.setup(merged.jira)
+  merged.jira = jira.setup(merged.jira, defaults.jira)
 
   M.config = merged
 

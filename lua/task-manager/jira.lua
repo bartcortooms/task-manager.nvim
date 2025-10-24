@@ -45,33 +45,40 @@ local function normalize_domain(url)
   return url
 end
 
-function M.setup(config)
+local function resolve_config(config, defaults)
   config = config or {}
-
-  local ok_lazy, lazy = pcall(require, "lazy")
-  if ok_lazy then
-    pcall(lazy.load, { plugins = { "jirac.nvim" } })
-  end
+  defaults = defaults or {}
 
   local resolved = {
     url = normalize_domain(resolve_value(config.url, "url")),
     email = resolve_value(config.email, "email"),
     api_token = resolve_value(config.api_token, "api_token"),
-    jql = resolve_value(config.jql, "jql") or "",
-    max_results = tonumber(resolve_value(config.max_results, "max_results") or config.max_results) or 50,
+    jql = resolve_value(config.jql, "jql") or defaults.jql or "",
+    max_results = tonumber(resolve_value(config.max_results, "max_results") or defaults.max_results or config.max_results) or defaults.max_results or 50,
   }
 
   if not resolved.url then
-    error("Task Manager: jira.url is required")
+    error("Task Manager: configure jira.url via require('task-manager').setup({ jira = { url = ... } })")
   end
   if not resolved.email then
-    error("Task Manager: jira.email is required")
+    error("Task Manager: configure jira.email via require('task-manager').setup({ jira = { email = ... } })")
   end
   if not resolved.api_token then
-    error("Task Manager: jira.api_token is required")
+    error("Task Manager: configure jira.api_token via require('task-manager').setup({ jira = { api_token = ... } })")
   end
   if resolved.max_results <= 0 then
     error("Task Manager: jira.max_results must be greater than zero")
+  end
+
+  return resolved
+end
+
+function M.setup(config, defaults)
+  local resolved = resolve_config(config, defaults)
+
+  local ok_lazy, lazy = pcall(require, "lazy")
+  if ok_lazy then
+    pcall(lazy.load, { plugins = { "jirac.nvim" } })
   end
 
   local ok, jirac = pcall(require, "jirac")
@@ -86,6 +93,7 @@ function M.setup(config)
   })
 
   M.config = resolved
+  return resolved
 end
 
 function M.fetch_assigned_issues()
@@ -145,5 +153,7 @@ function M.fetch_assigned_issues()
 
   return issues
 end
+
+M.resolve_config = resolve_config
 
 return M
