@@ -2,6 +2,26 @@
 
 A multi-repository task management system for Neovim that integrates Jira workflows with git worktrees and session management.
 
+## Quick Start
+
+Here's how a typical workflow looks:
+
+1. **Navigate to your tasks directory:**
+   ```bash
+   cd ~/tasks
+   nvim
+   ```
+
+2. **Pick a Jira issue:** A picker automatically opens showing your assigned issues. Select one (or choose manual entry).
+
+3. **Confirm the branch suffix:** The issue summary is automatically converted to a branch suffix (e.g., "Fix Login Bug" → `fix-login-bug`). Edit or accept it.
+
+4. **Select a repository:** Choose which repo to start with from your available bare repositories.
+
+5. **Start working:** You're now in `~/tasks/dev-123-fix-login-bug/repo-name/` with the branch `dev-123-fix-login-bug` checked out.
+
+Need to work on another repo for the same ticket? Press `<leader>ta` to add more repositories to the task.
+
 ## Overview
 
 This task manager helps you organize your work when a single Jira ticket requires changes across multiple repositories. It creates isolated workspaces for each task using git worktrees.
