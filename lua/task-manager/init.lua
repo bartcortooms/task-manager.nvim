@@ -14,6 +14,8 @@ local parse_issue_string = task_utils.parse_issue_string
 local is_path_inside = task_utils.is_path_inside
 local get_task_repos = task_utils.get_task_repos
 
+local sidekick_cwd_patched = false
+
 local defaults = {
   -- Base directory for tasks (each task gets its own directory)
   tasks_base = vim.fn.expand("~") .. "/tasks",
@@ -72,6 +74,60 @@ end
 
 local function resolve_task_dir(path)
   return task_utils.resolve_task_dir(path, M.config.tasks_base)
+end
+
+local function get_claude_cwd()
+  local current = vim.fn.getcwd()
+  local task_dir = resolve_task_dir(current)
+  if task_dir and task_dir ~= "" then
+    return normalize_path(task_dir)
+  end
+
+  local config = M.config or defaults
+  local tasks_base = normalize_path(config.tasks_base or defaults.tasks_base)
+  if tasks_base and tasks_base ~= "" then
+    return tasks_base
+  end
+
+  return nil
+end
+
+local function setup_sidekick_claude_integration()
+  if sidekick_cwd_patched then
+    return
+  end
+
+  local ok, session = pcall(require, "sidekick.cli.session")
+  if not ok or type(session.cwd) ~= "function" then
+    return
+  end
+
+  local original_cwd = session.cwd
+
+  session.cwd = function(opts)
+    opts = opts or {}
+    if not opts.cwd then
+      local tool = opts.tool
+      local tool_name = nil
+      if type(tool) == "table" then
+        tool_name = tool.name
+      elseif type(tool) == "string" then
+        tool_name = tool
+      end
+
+      if tool_name == "claude" then
+        local override = get_claude_cwd()
+        if override and override ~= "" then
+          opts = vim.tbl_extend("force", {}, opts)
+          opts.cwd = override
+        end
+      end
+    end
+
+    return original_cwd(opts)
+  end
+
+  sidekick_cwd_patched = true
 end
 
 -- Helper: Get list of available bare repos
@@ -281,13 +337,63 @@ local function add_repo_worktree(task_dir, repo, branch_base, opts)
 end
 
 
-local function finalize_task(issue_key, suffix)
+local function ensure_issue_description_file(task_dir, issue)
+  local description_file = task_dir .. "/issue-description.md"
+  if vim.fn.filereadable(description_file) == 1 then
+    return true
+  end
+
+  if not issue or not issue.description or issue.description == "" then
+    return false
+  end
+
+  local header_parts = {}
+  if issue.key and issue.key ~= "" then
+    table.insert(header_parts, issue.key)
+  end
+  if issue.summary and issue.summary ~= "" then
+    table.insert(header_parts, issue.summary)
+  end
+
+  local lines = {}
+  if #header_parts > 0 then
+    table.insert(lines, "# " .. table.concat(header_parts, ": "))
+    table.insert(lines, "")
+  end
+
+  vim.list_extend(lines, vim.split(issue.description, "\n", { plain = true }))
+
+  local ok, err = pcall(vim.fn.writefile, lines, description_file)
+  if not ok then
+    vim.notify("Failed to write Jira description: " .. tostring(err), vim.log.levels.WARN)
+    return false
+  end
+
+  return true
+end
+
+
+local function finalize_task(issue_key, suffix, issue_details)
   local task_dir_name = build_task_name(issue_key, suffix or "")
   local task_dir = M.config.tasks_base .. "/" .. task_dir_name
 
   if vim.fn.isdirectory(task_dir) == 0 then
     vim.fn.mkdir(task_dir, "p")
     vim.notify("Created task directory: " .. task_dir, vim.log.levels.INFO)
+  end
+
+  local has_description_file = ensure_issue_description_file(task_dir, issue_details)
+  if not has_description_file and jira.is_enabled and jira.is_enabled() then
+    local issue, err = jira.fetch_issue(issue_key)
+    if issue then
+      if issue.description and issue.description ~= "" then
+        ensure_issue_description_file(task_dir, issue)
+      else
+        vim.notify("No Jira description available for " .. issue_key, vim.log.levels.INFO)
+      end
+    elseif err and err ~= "" then
+      vim.notify(err, vim.log.levels.WARN)
+    end
   end
 
   local label = issue_key
@@ -320,11 +426,11 @@ local function finalize_task(issue_key, suffix)
   })
 end
 
-local function prompt_suffix(issue_key, default_suffix)
+local function prompt_suffix(issue_key, default_suffix, issue_details)
   ui.prompt_suffix({
     default_suffix = default_suffix or "",
     on_submit = function(suffix)
-      finalize_task(issue_key, suffix)
+      finalize_task(issue_key, suffix, issue_details)
     end,
   })
 end
@@ -340,7 +446,7 @@ local function prompt_manual_issue(default_issue, default_suffix)
     end,
     on_submit = function(issue_key, inline_suffix)
       local suffix_hint = inline_suffix ~= "" and inline_suffix or (default_suffix or "")
-      prompt_suffix(issue_key, suffix_hint)
+      prompt_suffix(issue_key, suffix_hint, nil)
     end,
   })
 end
@@ -363,7 +469,8 @@ function M.create_task(issue_number)
   local issues, fetch_err = jira.fetch_assigned_issues()
   if not issues then
     if fetch_err and fetch_err ~= "" then
-      vim.notify(fetch_err, vim.log.levels.ERROR)
+      local level = (jira.is_enabled and jira.is_enabled()) and vim.log.levels.ERROR or vim.log.levels.INFO
+      vim.notify(fetch_err, level)
     end
   else
     if #issues == 0 then
@@ -392,7 +499,12 @@ function M.create_task(issue_number)
       end
 
       local suffix_hint = slugify(issue.summary or "")
-      prompt_suffix(issue_key:upper(), suffix_hint)
+      local issue_details = {
+        key = issue_key:upper(),
+        summary = issue.summary,
+        description = issue.description,
+      }
+      prompt_suffix(issue_details.key, suffix_hint, issue_details)
     end,
   })
 end
@@ -799,6 +911,8 @@ function M.setup(opts)
   -- Ensure base directories exist
   vim.fn.mkdir(M.config.tasks_base, "p")
   vim.fn.mkdir(M.config.repos_base, "p")
+
+  setup_sidekick_claude_integration()
 
   -- Register commands
   vim.api.nvim_create_user_command("JiraTask", function(cmd_opts)

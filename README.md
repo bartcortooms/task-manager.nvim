@@ -12,15 +12,35 @@ Here's how a typical workflow looks:
    nvim
    ```
 
-2. **Pick a Jira issue:** A picker automatically opens showing your assigned issues. Select one (or choose manual entry).
+2. **Pick a Jira issue:** A picker automatically opens showing your assigned issues. Select one (or choose manual entry). *(If Jira integration is disabled, you'll drop straight into the manual entry flow.)*
 
 3. **Confirm the branch suffix:** The issue summary is automatically converted to a branch suffix (e.g., "Fix Login Bug" → `fix-login-bug`). Edit or accept it.
 
 4. **Select a repository:** Choose which repo to start with from your available bare repositories.
 
-5. **Start working:** You're now in `~/tasks/dev-123-fix-login-bug/repo-name/` with the branch `dev-123-fix-login-bug` checked out.
+5. **Review the issue brief:** `issue-description.md` is created alongside your worktrees. It contains the Jira summary/description so you always have the ticket context locally (see the sample `keymaps` in the config section if you want to change the shortcuts referenced below).
 
-Need to work on another repo for the same ticket? Press `<leader>ta` to add more repositories to the task.
+6. **Start working:** You're now in `~/tasks/dev-123-fix-login-bug/repo-name/` with the branch `dev-123-fix-login-bug` checked out.
+
+Need to work on another repo for the same ticket? With the default keymaps from the config snippet below, press `<leader>ta` to add more repositories to the task.
+
+### Loop Claude Code into the task
+
+If you use Sidekick with Claude Code (recommended in the sample config), the `claude` CLI automatically starts from the task directory. Pop it open and point it at the description:
+
+```vim
+" inside the task
+:edit issue-description.md               " skim or update the brief
+<leader>ac                               " toggle Claude Code via Sidekick (see config snippet)
+```
+
+From the Claude prompt you can run:
+
+```
+take a look at @issue-description.md and give me a plan for this task
+```
+
+Because the CLI launches in the task root, it immediately sees `issue-description.md`, your repo worktrees, and any notes you add while working.
 
 ## Overview
 
@@ -69,10 +89,11 @@ Add this spec to your Lazy config.
   "bartcortooms/task-manager.nvim",
   dependencies = {
     "folke/snacks.nvim",
-    "janBorowy/jirac.nvim",
     "grapp-dev/nui-components.nvim",
     "MunifTanjim/nui.nvim",
     "nvim-telescope/telescope.nvim",
+    -- Optional Jira integration (see below)
+    -- "janBorowy/jirac.nvim",
   },
   config = function()
     require("task-manager").setup({
@@ -92,7 +113,7 @@ Add this spec to your Lazy config.
 ### Dependencies
 
 - `folke/snacks.nvim` (inputs, pickers)
-- `janBorowy/jirac.nvim` + `nvim-lua/plenary.nvim` (Jira REST client)
+- (Optional) `janBorowy/jirac.nvim` + `nvim-lua/plenary.nvim` (Jira REST client backing the issue picker)
 - `grapp-dev/nui-components.nvim` + `MunifTanjim/nui.nvim` (menus)
 - `nvim-telescope/telescope.nvim` (task picker)
 - Optional integrations: `nvim-neo-tree/neo-tree.nvim`, `rmagatti/auto-session`
@@ -126,6 +147,13 @@ require("task-manager").setup({
     jql = "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC",
     max_results = 50,
   },
+  keymaps = {
+    list_tasks = "<leader>tt",
+    jira_task = "<leader>tc",
+    add_repo = "<leader>ta",
+    list_task_repos = "<leader>tr",
+    list_prs = "<leader>tpr",
+  },
   -- tasks_base = vim.fn.expand("~") .. "/tasks",
   -- repos_base = vim.fn.expand("~") .. "/repos",
   -- auto_open = {
@@ -137,6 +165,73 @@ require("task-manager").setup({
 `jira.api_token` can return a string or execute a secret retrieval function (e.g. macOS Keychain, 1Password CLI, environment variable). All fields are mandatory and validated during `setup()`.
 
 > **Tip:** The `jira.url` value can include or omit `https://`; it is normalised internally (e.g. `"https://foobar.atlassian.net/"` → `"foobar.atlassian.net"`).
+
+### Jira Integration (optional)
+
+`jirac.nvim` powers the Jira picker and issue-description sync, but the task manager still works without it (you'll use the manual entry path). To enable Jira:
+
+1. Add the dependency to your plugin manager (uncomment the line in the spec above, or add it separately). It requires `nvim-lua/plenary.nvim`.
+2. Ensure you provide the Jira credentials in the `jira` block inside `require("task-manager").setup({ ... })`.
+
+#### Configuring credentials
+
+The plugin needs three bits of information:
+
+- `jira.url` – your Atlassian Cloud hostname such as `https://company.atlassian.net` (the protocol/ trailing slash are optional; they’re normalised internally).
+- `jira.email` – the email address tied to your Jira account.
+- `jira.api_token` – an API token created at <https://id.atlassian.com/manage-profile/security/api-tokens>.
+
+You can hardcode the token (string) or return it from a function. A few common patterns:
+
+```lua
+-- macOS Keychain
+jira = {
+  api_token = function()
+    return vim.fn.system("security find-generic-password -s 'Jira API Token' -w")
+  end,
+}
+
+-- 1Password CLI (op inject)
+jira = {
+  api_token = function()
+    return vim.fn.system("op read op://Engineering/Jira/api_token --no-newline")
+  end,
+}
+
+-- Environment variable
+jira = {
+  api_token = os.getenv("JIRA_API_TOKEN"),
+}
+```
+
+Whatever you return is trimmed; if the command fails the plugin will warn you during setup.
+
+When `jirac.nvim` is missing the plugin falls back to manual creation—no errors, just a heads-up notification when you try to open the picker.
+
+### Sidekick / Claude Code (optional)
+
+If you're using Sidekick to drive Claude Code, configure the CLI defaults and keymaps explicitly so the shortcuts referenced in the quick start work out of the box:
+
+```lua
+{
+  "folke/sidekick.nvim",
+  opts = {
+    cli = {
+      default = "claude",
+      mux = {
+        backend = "tmux",
+        enabled = true,
+      },
+    },
+  },
+  keys = {
+    { "<leader>aa", function() require("sidekick.cli").toggle() end, desc = "Toggle CLI" },
+    { "<leader>as", function() require("sidekick.cli").select() end, desc = "Select CLI" },
+    { "<leader>ap", function() require("sidekick.cli").prompt() end, desc = "Select Prompt" },
+    { "<leader>ac", function() require("sidekick.cli").toggle({ name = "claude" }) end, desc = "Open Claude Code" },
+  },
+}
+```
 
 ## Usage
 
