@@ -118,8 +118,7 @@ local function gh_available()
   return vim.fn.executable("gh") == 1
 end
 
-local function fetch_pr_for_branch(repo_root, branch, repo_slug)
-  local fields = { "number", "title", "state", "url", "isDraft", "mergeStateStatus", "headRefName" }
+local function run_gh_pr_view(repo_root, branch, repo_slug, fields)
   local cmd = { "gh", "pr", "view", branch }
   if repo_slug then
     table.insert(cmd, "--repo")
@@ -149,6 +148,30 @@ local function fetch_pr_for_branch(repo_root, branch, repo_slug)
   return decoded, nil
 end
 
+local function fetch_pr_for_branch(repo_root, branch, repo_slug)
+  local fields = {
+    "number",
+    "title",
+    "state",
+    "url",
+    "isDraft",
+    "mergeStateStatus",
+    "headRefName",
+    "bodyText",
+    "body",
+  }
+  local pr, err = run_gh_pr_view(repo_root, branch, repo_slug, fields)
+
+  if err and err:match('Unknown JSON field:%s+"bodyText"') then
+    fields = vim.tbl_filter(function(field)
+      return field ~= "bodyText"
+    end, fields)
+    pr, err = run_gh_pr_view(repo_root, branch, repo_slug, fields)
+  end
+
+  return pr, err
+end
+
 local function build_pr_item(entry)
   local branch = entry.branch or git.get_repo_branch(entry.path)
   local repo_slug = git.get_remote_repo(entry.path)
@@ -169,8 +192,7 @@ local function build_pr_item(entry)
   if upstream then
     item.upstream = upstream
   else
-    item.status = "No upstream"
-    return item
+    item.status = item.status or "No upstream"
   end
 
   if not gh_available() then
@@ -181,10 +203,11 @@ local function build_pr_item(entry)
   local pr, err = fetch_pr_for_branch(entry.path, branch, repo_slug)
   if pr then
     item.pr = pr
+    item.status = nil
   elseif err then
     item.error = err
   else
-    item.status = "No PR"
+    item.status = item.status or "No PR"
   end
 
   return item

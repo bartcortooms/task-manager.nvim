@@ -254,8 +254,22 @@ function M.list_repos_picker(opts)
   }):find()
 end
 
+local function truncate_field(text, max_len)
+  if not text then
+    return ""
+  end
+  local str = tostring(text)
+  if #str <= max_len then
+    return str
+  end
+  if max_len <= 3 then
+    return str:sub(1, max_len)
+  end
+  return str:sub(1, max_len - 3) .. "..."
+end
+
 local function format_pr_entry(item)
-  local branch = item.branch or "-"
+  local branch = truncate_field(item.branch or "-", 20)
   local status
   local summary
 
@@ -274,7 +288,7 @@ local function format_pr_entry(item)
   end
 
   local repo = item.repo_slug or ""
-  return string.format("%-18s %-24s %-12s %-16s %s", item.worktree_name or "", branch, status, repo, summary)
+  return string.format("%-18s %-20s %-12s %-16s %s", item.worktree_name or "", branch, status, repo, summary)
 end
 
 function M.show_pr_overview(items, opts)
@@ -289,6 +303,7 @@ function M.show_pr_overview(items, opts)
   local conf = require("telescope.config").values
   local actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
+  local previewers = require("telescope.previewers")
 
   pickers.new({}, {
     prompt_title = opts.prompt_title or "Task PR Overview",
@@ -309,6 +324,76 @@ function M.show_pr_overview(items, opts)
       end,
     }),
     sorter = conf.generic_sorter({}),
+    previewer = previewers.new_buffer_previewer({
+      define_preview = function(self, entry, _)
+        local item = entry.value
+        local buf = self.state.bufnr
+        vim.api.nvim_buf_set_option(buf, "filetype", "markdown")
+
+        local function extend_lines(target, text)
+          if not text or text == "" then
+            return
+          end
+          local normalized = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+          local chunks = vim.split(normalized, "\n", { plain = true, trimempty = false })
+          vim.list_extend(target, chunks)
+        end
+
+        if not item then
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "No pull request details available." })
+          return
+        end
+
+        if not item.pr then
+          local lines = {
+            "# Pull request not found",
+            "",
+            ("Repository: %s"):format(item.repo_slug or "-"),
+            ("Branch: %s"):format(item.branch or "-"),
+          }
+          if item.error then
+            table.insert(lines, "")
+            table.insert(lines, "Error:")
+            extend_lines(lines, item.error)
+          elseif item.status then
+            table.insert(lines, "")
+            table.insert(lines, ("Status: %s"):format(item.status))
+          end
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+          return
+        end
+
+        local pr = item.pr
+        local lines = {}
+        local title = pr.title or ""
+        if title ~= "" then
+          table.insert(lines, "# " .. title)
+          table.insert(lines, "")
+        end
+
+        table.insert(lines, ("State: %s"):format(pr.state or "-"))
+        if pr.mergeStateStatus then
+          table.insert(lines, ("Merge State: %s"):format(pr.mergeStateStatus))
+        end
+        if pr.isDraft then
+          table.insert(lines, "Draft: yes")
+        end
+        table.insert(lines, ("Branch: %s"):format(pr.headRefName or item.branch or "-"))
+        table.insert(lines, ("Repository: %s"):format(item.repo_slug or "-"))
+
+        local body = pr.bodyText or pr.body or ""
+        if body ~= "" then
+          table.insert(lines, "")
+          extend_lines(lines, body)
+        end
+
+        if vim.tbl_isempty(lines) then
+          lines = { "No pull request details available." }
+        end
+
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+      end,
+    }),
     attach_mappings = function(prompt_bufnr, map)
       local function handle_open_pr()
         local selection = action_state.get_selected_entry()

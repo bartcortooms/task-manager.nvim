@@ -166,6 +166,36 @@ local function extract_description(raw_description, adf_utils)
   return nil
 end
 
+local DONE_STATUS_NAMES = {
+  done = true,
+  resolved = true,
+  closed = true,
+  canceled = true,
+  cancelled = true,
+}
+
+local function is_actionable_status(status)
+  if type(status) ~= "table" then
+    return true
+  end
+
+  local category = status.statusCategory
+  if type(category) == "table" then
+    local category_key = type(category.key) == "string" and category.key:lower() or nil
+    local category_name = type(category.name) == "string" and category.name:lower() or nil
+    if category_key == "done" or category_name == "done" then
+      return false
+    end
+  end
+
+  local name = type(status.name) == "string" and status.name:lower() or nil
+  if name and DONE_STATUS_NAMES[name] then
+    return false
+  end
+
+  return true
+end
+
 function M.setup(config, defaults)
   local ok_lazy, lazy = pcall(require, "lazy")
   if ok_lazy then
@@ -217,7 +247,7 @@ function M.fetch_assigned_issues()
       query = {
         jql = M.config.jql,
         maxResults = M.config.max_results,
-        fields = "summary,description",
+        fields = "summary,description,status",
       },
     }),
   })
@@ -234,18 +264,23 @@ function M.fetch_assigned_issues()
   for _, raw_issue in ipairs(result) do
     if type(raw_issue) == "table" then
       local key = raw_issue.key
-      local summary = raw_issue.summary or (raw_issue.fields and raw_issue.fields.summary) or ""
-      local raw_description = raw_issue.description
-        or (raw_issue.fields and raw_issue.fields.description)
-      local description = extract_description(raw_description, deps.adf_utils)
+      local fields = raw_issue.fields or {}
+      local summary = raw_issue.summary or fields.summary or ""
+      local raw_description = raw_issue.description or fields.description
+      local status = raw_issue.status or fields.status
 
-      if key then
-        table.insert(issues, {
-          key = key,
-          summary = summary,
-          description = description,
-          raw = raw_issue,
-        })
+      if is_actionable_status(status) then
+        local description = extract_description(raw_description, deps.adf_utils)
+
+        if key then
+          table.insert(issues, {
+            key = key,
+            summary = summary,
+            description = description,
+            status = status and status.name,
+            raw = raw_issue,
+          })
+        end
       end
     end
   end
