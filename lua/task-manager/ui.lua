@@ -329,6 +329,7 @@ function M.show_pr_overview(items, opts)
         local item = entry.value
         local buf = self.state.bufnr
         vim.api.nvim_buf_set_option(buf, "filetype", "markdown")
+        vim.api.nvim_buf_set_option(buf, "modifiable", true)
 
         local function extend_lines(target, text)
           if not text or text == "" then
@@ -391,7 +392,9 @@ function M.show_pr_overview(items, opts)
           lines = { "No pull request details available." }
         end
 
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        vim.api.nvim_buf_set_option(buf, "modifiable", false)
       end,
     }),
     attach_mappings = function(prompt_bufnr, map)
