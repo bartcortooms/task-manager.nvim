@@ -312,6 +312,21 @@ local function collect_pr_items()
   return items, nil
 end
 
+local function filter_closed_prs(items)
+  if not items then
+    return {}
+  end
+
+  local filtered = {}
+  for _, item in ipairs(items) do
+    local state = item.pr and item.pr.state
+    if type(state) ~= "string" or state:upper() ~= "CLOSED" then
+      table.insert(filtered, item)
+    end
+  end
+  return filtered
+end
+
 local function build_pr_nodes(items)
   local nodes = {}
   local max_number = 1
@@ -423,14 +438,20 @@ function M.list_overview()
     return
   end
 
-  local nodes, max_number = build_pr_nodes(items)
+  local shown_items = filter_closed_prs(items)
+  if vim.tbl_isempty(shown_items) then
+    vim.notify("No open pull requests found for current context.", vim.log.levels.INFO)
+    return
+  end
+
+  local nodes, max_number = build_pr_nodes(shown_items)
 
   if #nodes > 0 and ensure_octo_available() then
     show_with_octo_picker(nodes, max_number)
     return
   end
 
-  ui.show_pr_overview(items, {
+  ui.show_pr_overview(shown_items, {
     on_open_pr = function(selected)
       M.open_pr_details(selected)
     end,
