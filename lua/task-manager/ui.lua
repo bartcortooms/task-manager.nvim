@@ -254,6 +254,49 @@ function M.list_repos_picker(opts)
   }):find()
 end
 
+function M.confirm_yes_no(opts)
+  opts = opts or {}
+  local Snacks = require("snacks")
+
+  local choices = {
+    { label = opts.yes_label or "Yes", value = true },
+    { label = opts.no_label or "No", value = false },
+  }
+
+  Snacks.picker.select(choices, {
+    prompt = opts.prompt or "Confirm selection",
+    format_item = function(item)
+      return item.label
+    end,
+  }, function(choice)
+    if not choice then
+      if opts.on_cancel then
+        opts.on_cancel()
+      end
+      if opts.on_confirm then
+        opts.on_confirm(false, nil)
+      end
+      return
+    end
+
+    if choice.value then
+      if opts.on_yes then
+        opts.on_yes(choice)
+      end
+      if opts.on_confirm then
+        opts.on_confirm(true, choice)
+      end
+    else
+      if opts.on_no then
+        opts.on_no(choice)
+      end
+      if opts.on_confirm then
+        opts.on_confirm(false, choice)
+      end
+    end
+  end)
+end
+
 local function truncate_field(text, max_len)
   if not text then
     return ""

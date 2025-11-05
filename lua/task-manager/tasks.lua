@@ -229,8 +229,9 @@ local function finalize_task(issue_key, suffix, issue_details)
     vim.notify("Created task directory: " .. task_dir, vim.log.levels.INFO)
   end
 
-  local has_description_file = ensure_issue_description_file(task_dir, issue_details)
-  if not has_description_file and jira.is_enabled and jira.is_enabled() then
+  local has_description_file = ensure_issue_description_file(task_dir, issue_details ~= false and issue_details or nil)
+  local should_fetch = issue_details ~= false
+  if not has_description_file and should_fetch and jira.is_enabled and jira.is_enabled() then
     local issue, err = jira.fetch_issue(issue_key)
     if issue then
       if issue.description and issue.description ~= "" then
@@ -285,7 +286,7 @@ local function prompt_manual_issue(default_issue, default_suffix)
     end,
     on_submit = function(issue_key, inline_suffix)
       local suffix_hint = inline_suffix ~= "" and inline_suffix or (default_suffix or "")
-      prompt_suffix(issue_key, suffix_hint, nil)
+      prompt_suffix(issue_key, suffix_hint, false)
     end,
   })
 end
@@ -667,13 +668,20 @@ function M.prompt_delete_task(task)
     return
   end
 
-  vim.ui.input({ prompt = "Delete task " .. task_name:upper() .. "? Type 'yes' to confirm: " }, function(answer)
-    if answer and answer:lower():match("^y") then
+  ui.confirm_yes_no({
+    prompt = "Delete task " .. task_name:upper() .. "?",
+    yes_label = "Yes, delete",
+    no_label = "No, cancel",
+    on_yes = function()
       M.delete_task(task_name)
-    else
+    end,
+    on_no = function()
       vim.notify("Task deletion cancelled", vim.log.levels.INFO)
-    end
-  end)
+    end,
+    on_cancel = function()
+      vim.notify("Task deletion cancelled", vim.log.levels.INFO)
+    end,
+  })
 end
 
 return M

@@ -726,7 +726,13 @@ function M.fetch_issue(issue_key)
   })
 
   if not ok_fetch then
-    return nil, "Task Manager: Jira issue fetch failed - " .. result
+    local err_msg = result
+    if type(err_msg) == "table" then
+      err_msg = err_msg.message or err_msg.error or vim.inspect(err_msg)
+    else
+      err_msg = tostring(err_msg)
+    end
+    return nil, "Task Manager: Jira issue fetch failed - " .. err_msg
   end
 
   if type(result) ~= "table" then
